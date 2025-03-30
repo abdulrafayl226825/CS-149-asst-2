@@ -1,15 +1,19 @@
 #ifndef _TASKSYS_H
 #define _TASKSYS_H
-
+#include "atomic"
 #include "itasksys.h"
-#include <atomic>
+#include "mutex"
+#include "queue"
+#include "thread"
+#include "unordered_map"
+#include "unordered_set"
+#include "vector"
 #include <condition_variable>
+#include <cstddef>
 #include <memory>
-#include <queue>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
+#include <mutex>
 using namespace std;
+
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -67,44 +71,53 @@ public:
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 
+//
+struct waitingGroup {
+  int group_id;
+  IRunnable *runnable;
+
+  int num_total_subtasks;
+  atomic<int> tasks_I_depends_upon;
+  unordered_set<int> tasks_that_depend_on_me;
+  atomic<int> completed_subtasks;
+
+  waitingGroup(int group_id, IRunnable *runnable, int num_total_subtasks)
+      : group_id(group_id), runnable(runnable),
+        num_total_subtasks(num_total_subtasks), tasks_I_depends_upon(0),
+        completed_subtasks(0) {}
+
+  waitingGroup()
+      : group_id(-1), runnable(nullptr), num_total_subtasks(0),
+        completed_subtasks(0) {}
+};
+
+struct subtask {
+  shared_ptr<waitingGroup> parent_task;
+  int subtask_id;
+  subtask(shared_ptr<waitingGroup> parent_task, int subtask_id)
+      : parent_task(parent_task), subtask_id(subtask_id) {}
+};
+
 class TaskSystemParallelThreadPoolSleeping : public ITaskSystem {
-private:
-  struct WaitingGroup {
-    IRunnable *runnable;
-    const int num_total_tasks;
-    atomic<int> completed_tasks;
-    unordered_set<int> depends_upon;
-    atomic<int> my_deps;
-    atomic<int> started_counts;
-    WaitingGroup(IRunnable *runnable, int num_total_tasks, int deps_size)
-        : runnable(runnable), num_total_tasks(num_total_tasks),
-          completed_tasks(0), my_deps(deps_size), started_counts(0) {}
-    WaitingGroup() = delete;
-  };
-
-  unordered_set<int> marked;
-  vector<thread> threads;
+  vector<thread> thread_pool;
+  queue<subtask> ready_tasks;
   atomic<int> nextTaskID;
-  atomic<int> remaining_bulks;
-
-  unordered_map<TaskID, shared_ptr<WaitingGroup>> waitingGroups;
-
-  atomic<bool> shutdown;
-  queue<shared_ptr<WaitingGroup>> ready_tasks;
+  unordered_map<int, std::shared_ptr<waitingGroup>> waiting_tasks;
+  atomic<int> remaining_tasks;
+  atomic<bool> shutDown;
   mutex thread_mutex;
-  condition_variable cv;
-  condition_variable syc;
-
-  void worket_thread();
+  unordered_set<TaskID> mark_completed;
+  condition_variable available_check;
+  condition_variable sync_condition;
 
 public:
   TaskSystemParallelThreadPoolSleeping(int num_threads);
   ~TaskSystemParallelThreadPoolSleeping();
   const char *name();
+  void worker_thread();
   void run(IRunnable *runnable, int num_total_tasks);
   TaskID runAsyncWithDeps(IRunnable *runnable, int num_total_tasks,
-                          const std::vector<TaskID> &deps);
+                          const vector<TaskID> &deps);
   void sync();
 };
-
 #endif
